@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LM Studio Chat</title>
+    <style>
+      body {
+        max-width: 800px;
+        margin: 20px auto;
+        padding: 0 20px;
+        font-family: Arial, sans-serif;
+      }
+      #status-message {
+        text-align: center;
+        font-size: 24px;
+        margin: 20px 0;
+      }
+      #reward-video {
+        display: none;
+        width: 100%;
+        max-width: 800px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="status-message"></div>
+    <video id="reward-video" src="./video.mp4" controls></video>
+    <video
+      id="video"
+      width="400"
+      height="300"
+      autoplay
+      style="display: none"
+    ></video>
+    <canvas id="canvas" width="400" height="300" style="display: none"></canvas>
+
+    <script>
+      const API_URL = "http://172.20.12.14:1234/v1/chat/completions";
+      let chatHistory = [];
+      const chatOutput = document.getElementById("chat-output");
+      const chatInput = document.getElementById("chat-input");
+      const video = document.getElementById("video");
+      const canvas = document.getElementById("canvas");
+      const context = canvas.getContext("2d");
+
+      // Initialize camera
+      async function initCamera() {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+          });
+          video.srcObject = stream;
+        } catch (err) {
+          console.error("Error accessing camera:", err);
+        }
+      }
+
+      // Capture image and convert to base64
+      function captureImage() {
+        context.drawImage(video, 0, 0, canvas.width, canvas.height);
+        return canvas.toDataURL("image/png").split(",")[1];
+      }
+
+      async function sendImageToModel() {
+        const imageBase64 = captureImage();
+
+        try {
+          const response = await fetch(
+            "http://172.20.12.14:1234/v1/chat/completions",
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                model: "llava-v1.5-7b",
+                messages: [
+                  {
+                    role: "system",
+                    content:
+                      "you are a helpful assistant, specialised in hand gesture recognition. you will be given an image and you will need to analyse it and return a JSON object with the following properties: isPerson: true if a person is detected in the image, isVictorySign: true if the person is holding two fingers together in a 'peace' sign",
+                  },
+                  {
+                    role: "user",
+                    content: [
+                      {
+                        type: "text",
+                        text: "Is there a person in this image? Are they holding two fingers together in a 'peace' sign?",
+                      },
+                      {
+                        type: "image_url",
+                        image_url: {
+                          url: `data:image/png;base64,${imageBase64}`,
+                        },
+                      },
+                    ],
+                  },
+                ],
+                response_format: {
+                  type: "json_schema",
+                  json_schema: {
+                    name: "image_analysis",
+                    strict: "true",
+                    schema: {
+                      type: "object",
+                      properties: {
+                        isPerson: {
+                          type: "boolean",
+                          description:
+                            "True if a person is detected in the image",
+                        },
+                        isVictorySign: {
+                          type: "boolean",
+                          description:
+                            "True if the person is holding two fingers together in a 'peace' sign",
+                        },
+                      },
+                      required: ["isPerson", "isVictorySign"],
+                    },
+                  },
+                },
+                temperature: 0.7,
+                max_tokens: -1,
+              }),
+            }
+          );
+
+          const data = await response.json();
+          if (data.choices && data.choices[0].message) {
+            const content = JSON.parse(data.choices[0].message.content);
+            const statusMessage = document.getElementById("status-message");
+            const rewardVideo = document.getElementById("reward-video");
+
+            if (!content.isPerson) {
+              statusMessage.textContent = "No person detected";
+              rewardVideo.style.display = "none";
+            } else if (content.isVictorySign) {
+              statusMessage.textContent = "";
+              rewardVideo.style.display = "block";
+              rewardVideo.play();
+            } else {
+              statusMessage.textContent = "";
+              rewardVideo.style.display = "none";
+            }
+          }
+        } catch (error) {
+          console.error("Error:", error);
+          document.getElementById("status-message").textContent =
+            "Error: Failed to analyze image";
+        }
+      }
+
+      // Initialize camera and start periodic capture
+      initCamera();
+      setInterval(sendImageToModel, 10000); // Send image every 10 seconds
+    </script>
+  </body>
+</html>
