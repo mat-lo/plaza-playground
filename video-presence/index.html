@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Interactive Video Player with Face Detection</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        background-color: #000;
+        overflow: hidden;
+        font-family: Arial, sans-serif;
+      }
+
+      .container {
+        position: relative;
+        width: 100vw;
+        height: 100vh;
+      }
+
+      #mainVideo {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+      }
+
+      .webcam-container {
+        position: absolute;
+        bottom: 20px;
+        right: 20px;
+        width: 200px;
+        height: 150px;
+        border: 2px solid rgba(255, 255, 255, 0.5);
+        border-radius: 8px;
+        overflow: hidden;
+        box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+      }
+
+      #webcam {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        transform: rotateY(180deg);
+        -webkit-transform: rotateY(180deg);
+      }
+
+      #status {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        color: white;
+        background-color: rgba(0, 0, 0, 0.5);
+        padding: 8px;
+        border-radius: 4px;
+        font-size: 14px;
+        display: none; /* Hide status by default */
+      }
+
+      .loading {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        color: white;
+        font-size: 24px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <video id="mainVideo" muted autoplay playsinline></video>
+      <div class="webcam-container">
+        <video id="webcam" autoplay playsinline muted></video>
+      </div>
+      <div id="status">Face Detected</div>
+      <div id="loading" class="loading">
+        Loading videos and face detector...
+      </div>
+    </div>
+
+    <script type="module">
+      import {
+        FaceDetector,
+        FilesetResolver,
+      } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0";
+
+      // Video elements
+      const mainVideo = document.getElementById("mainVideo");
+      const webcam = document.getElementById("webcam");
+      const statusEl = document.getElementById("status");
+      const loadingEl = document.getElementById("loading");
+
+      // Video sources - replace these with your actual video paths
+      const videos = {
+        video1: "1.mp4",
+        video2: "2.mp4",
+        videoAI: "AI.mp4",
+      };
+
+      // State variables
+      let faceDetector;
+      let lastVideoTime = -1;
+      let faceDetected = false;
+      let currentVideo = "video1";
+      let shouldPlayAI = false;
+      let aiVideoPaused = false;
+
+      // Initialize face detector
+      const initializeFaceDetector = async () => {
+        try {
+          const vision = await FilesetResolver.forVisionTasks(
+            "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
+          );
+          faceDetector = await FaceDetector.createFromOptions(vision, {
+            baseOptions: {
+              modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite`,
+              delegate: "GPU",
+            },
+            runningMode: "VIDEO",
+          });
+
+          // Start webcam after detector is ready
+          startWebcam();
+        } catch (error) {
+          console.error("Error initializing face detector:", error);
+        }
+      };
+
+      // Start webcam feed
+      async function startWebcam() {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+          });
+          webcam.srcObject = stream;
+          webcam.addEventListener("loadeddata", () => {
+            // Start video playback and face detection after webcam is loaded
+            loadVideo(videos.video1);
+            predictWebcam();
+          });
+        } catch (err) {
+          console.error("Error accessing webcam:", err);
+        }
+      }
+
+      // Load a video source
+      function loadVideo(src) {
+        mainVideo.src = src;
+        mainVideo.load();
+        mainVideo
+          .play()
+          .catch((err) => console.error("Error playing video:", err));
+      }
+
+      // Handle video transitions
+      mainVideo.addEventListener("ended", () => {
+        if (currentVideo === "video1") {
+          // If face was detected during video1, play AI video next
+          if (shouldPlayAI && faceDetected) {
+            currentVideo = "videoAI";
+            loadVideo(videos.videoAI);
+          } else {
+            // Otherwise play video2
+            currentVideo = "video2";
+            loadVideo(videos.video2);
+          }
+        } else if (currentVideo === "video2") {
+          // After video2, always go back to video1
+          currentVideo = "video1";
+          shouldPlayAI = false; // Reset AI video trigger
+          loadVideo(videos.video1);
+        } else if (currentVideo === "videoAI") {
+          // After AI video, go back to video1
+          currentVideo = "video1";
+          shouldPlayAI = false; // Reset AI video trigger
+          loadVideo(videos.video1);
+        }
+      });
+
+      // Monitor AI video time for pausing at 3 seconds
+      mainVideo.addEventListener("timeupdate", () => {
+        // Only check for AI video
+        if (currentVideo === "videoAI") {
+          // If we reach 3 seconds and face is detected, pause
+          if (mainVideo.currentTime >= 3 && faceDetected && !aiVideoPaused) {
+            mainVideo.pause();
+            aiVideoPaused = true;
+            statusEl.textContent = "AI Video Paused";
+            statusEl.style.backgroundColor = "rgba(255, 152, 0, 0.7)";
+            statusEl.style.display = "block";
+            setTimeout(() => {
+              statusEl.style.display = "none";
+            }, 2000);
+          }
+          // We've moved the resume logic to the continuous predictWebcam function
+        }
+      });
+
+      // Continuous face detection
+      async function predictWebcam() {
+        if (webcam.currentTime !== lastVideoTime) {
+          lastVideoTime = webcam.currentTime;
+
+          if (faceDetector) {
+            try {
+              const startTimeMs = performance.now();
+              const results = faceDetector.detectForVideo(webcam, startTimeMs);
+
+              // Update face detection status
+              const wasFaceDetected = faceDetected;
+              faceDetected = results.detections.length > 0;
+
+              // Set flag to play AI video after video1 when face is detected
+              if (currentVideo === "video1" && faceDetected) {
+                shouldPlayAI = true;
+              }
+
+              // Check if we need to resume AI video (moved from timeupdate event)
+              if (
+                currentVideo === "videoAI" &&
+                aiVideoPaused &&
+                !faceDetected
+              ) {
+                mainVideo
+                  .play()
+                  .catch((err) => console.error("Error resuming video:", err));
+                aiVideoPaused = false;
+                statusEl.textContent = "AI Video Resumed";
+                statusEl.style.backgroundColor = "rgba(33, 150, 243, 0.7)";
+                statusEl.style.display = "block";
+                setTimeout(() => {
+                  statusEl.style.display = "none";
+                }, 2000);
+              }
+
+              // Show/hide status indicator (for debugging, can be removed)
+              if (faceDetected !== wasFaceDetected) {
+                statusEl.textContent = faceDetected
+                  ? "Face Detected"
+                  : "No Face Detected";
+                statusEl.style.backgroundColor = faceDetected
+                  ? "rgba(76, 175, 80, 0.7)"
+                  : "rgba(244, 67, 54, 0.7)";
+
+                // Briefly show status when detection state changes
+                statusEl.style.display = "block";
+                setTimeout(() => {
+                  statusEl.style.display = "none";
+                }, 2000);
+              }
+            } catch (error) {
+              console.error("Error in face detection:", error);
+            }
+          }
+        }
+
+        // Continue detection loop
+        window.requestAnimationFrame(predictWebcam);
+      }
+
+      // Start everything when page loads
+      window.addEventListener("DOMContentLoaded", () => {
+        // Add console logs for debugging
+        console.log("Starting application...");
+
+        // Check if videos exist and preload them
+        const videoPromises = Object.values(videos).map((src) => {
+          console.log(`Attempting to preload: ${src}`);
+          return new Promise((resolve, reject) => {
+            const video = document.createElement("video");
+            video.src = src;
+            video.onloadeddata = () => {
+              console.log(`Successfully loaded: ${src}`);
+              resolve();
+            };
+            video.onerror = () => {
+              console.error(`Failed to load video: ${src}`);
+              reject(`Failed to load ${src}`);
+            };
+          });
+        });
+
+        // Add event listener to debug AI video pausing and resuming
+        mainVideo.addEventListener("pause", () => {
+          console.log("Main video paused at:", mainVideo.currentTime);
+        });
+
+        mainVideo.addEventListener("play", () => {
+          console.log("Main video resumed at:", mainVideo.currentTime);
+        });
+
+        // Initialize when videos are loaded
+        Promise.all([...videoPromises])
+          .then(() => {
+            console.log("All videos preloaded successfully");
+            return initializeFaceDetector();
+          })
+          .then(() => {
+            console.log("Face detector initialized successfully");
+            loadingEl.style.display = "none";
+          })
+          .catch((error) => {
+            console.error("Error loading resources:", error);
+            loadingEl.textContent =
+              "Error loading videos. Please check console.";
+          });
+      });
+    </script>
+  </body>
+</html>
