@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Image Classification API</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        max-width: 800px;
+        margin: 0 auto;
+        padding: 20px;
+        line-height: 1.6;
+        color: #333;
+      }
+      h1 {
+        text-align: center;
+        color: #2c3e50;
+        margin-bottom: 30px;
+      }
+      .container {
+        background-color: #f8f9fa;
+        border-radius: 8px;
+        padding: 25px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      }
+      .form-group {
+        margin-bottom: 20px;
+      }
+      label {
+        display: block;
+        margin-bottom: 8px;
+        font-weight: bold;
+        color: #2c3e50;
+      }
+      input[type="file"] {
+        display: block;
+        margin-top: 10px;
+      }
+      button {
+        display: block;
+        width: 100%;
+        padding: 12px;
+        background-color: #3498db;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        font-size: 16px;
+        cursor: pointer;
+        transition: background-color 0.3s;
+      }
+      button:hover {
+        background-color: #2980b9;
+      }
+      button:disabled {
+        background-color: #95a5a6;
+        cursor: not-allowed;
+      }
+      #imagePreview {
+        max-width: 100%;
+        max-height: 300px;
+        margin: 15px auto;
+        display: none;
+        border-radius: 4px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+      }
+      #response {
+        margin-top: 25px;
+        padding: 15px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        background-color: #fff;
+        min-height: 100px;
+        max-height: 400px;
+        overflow-y: auto;
+      }
+      .loading {
+        text-align: center;
+        margin: 20px 0;
+        font-style: italic;
+        color: #7f8c8d;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 20px;
+      }
+      table,
+      th,
+      td {
+        border: 1px solid #ddd;
+      }
+      th,
+      td {
+        padding: 12px;
+        text-align: left;
+      }
+      th {
+        background-color: #f2f2f2;
+        color: #333;
+      }
+      tr:nth-child(even) {
+        background-color: #f9f9f9;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>Image Classification</h1>
+
+      <div class="form-group">
+        <label for="imageInput">Upload Image</label>
+        <input type="file" id="imageInput" accept="image/*" />
+        <img id="imagePreview" alt="Image Preview" />
+      </div>
+
+      <button id="submitBtn">Classify Image</button>
+
+      <div id="response"></div>
+    </div>
+
+    <script>
+      // DOM elements
+      const imageInput = document.getElementById("imageInput");
+      const imagePreview = document.getElementById("imagePreview");
+      const submitBtn = document.getElementById("submitBtn");
+      const responseDiv = document.getElementById("response");
+
+      // Preview the selected image
+      imageInput.addEventListener("change", function (e) {
+        const file = e.target.files[0];
+        if (file) {
+          const reader = new FileReader();
+          reader.onload = function (event) {
+            imagePreview.src = event.target.result;
+            imagePreview.style.display = "block";
+          };
+          reader.readAsDataURL(file);
+        } else {
+          imagePreview.style.display = "none";
+        }
+      });
+
+      // Helper function to convert file to base64
+      function fileToBase64(file) {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = (error) => reject(error);
+          reader.readAsDataURL(file);
+        });
+      }
+
+      // Add test function to verify API connection
+      async function testApiConnection() {
+        try {
+          const testPayload = {
+            model: "llama3.2-vision",
+            messages: [
+              {
+                role: "user",
+                content: "Hello, can you respond with a short test message?",
+              },
+            ],
+            format: "json",
+          };
+
+          const response = await fetch("http://localhost:11434/api/chat", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(testPayload),
+            signal: AbortSignal.timeout(5000),
+          });
+
+          if (response.ok) {
+            console.log("API connection test successful");
+            return true;
+          } else {
+            console.error(
+              "API connection test failed:",
+              response.status,
+              response.statusText
+            );
+            return false;
+          }
+        } catch (error) {
+          console.error("API connection test error:", error);
+          return false;
+        }
+      }
+
+      // Test connection on page load
+      document.addEventListener("DOMContentLoaded", () => {
+        testApiConnection().then((isConnected) => {
+          if (!isConnected) {
+            const warning = document.createElement("div");
+            warning.style.backgroundColor = "#ffe6e6";
+            warning.style.padding = "10px";
+            warning.style.borderRadius = "4px";
+            warning.style.marginBottom = "20px";
+            warning.innerHTML =
+              "<strong>Warning:</strong> Unable to connect to the Ollama API at http://localhost:11434. Make sure the server is running and accessible.";
+            document.querySelector(".container").prepend(warning);
+          }
+        });
+      });
+
+      // Submit the form
+      submitBtn.addEventListener("click", async function () {
+        if (!imageInput.files[0]) {
+          responseDiv.textContent = "Please select an image first";
+          return;
+        }
+
+        // Disable button and show loading state
+        submitBtn.disabled = true;
+        responseDiv.innerHTML = '<div class="loading">Analyzing image...</div>';
+
+        try {
+          // Convert image to base64
+          const base64Image = await fileToBase64(imageInput.files[0]);
+          const base64Data = base64Image.split(",")[1];
+
+          // Classification prompt
+          const classificationPrompt = `
+                Can you classify this image by these five parameters:
+                1. Warmth: Is the color atmosphere cold or warm?
+                2. Elements: What elements are in the picture (animal, object, people)?
+                3. Landscape: What type of background/setting is shown?
+                4. Emotional: What movie genre does this image evoke (thriller, horror, comedy, drama, etc.)?
+                5. Style: Is this an animation, photograph, painting, or movie still?
+
+                Please respond in JSON format with these fields: 
+                {
+                    "warmth": "cold or warm",
+                    "elements": ["list", "of", "elements"],
+                    "landscape": "description of background",
+                    "emotional": "movie genre",
+                    "style": "animation/photograph/painting/movie"
+                }
+                `;
+
+          // Prepare the payload
+          const payload = {
+            model: "llama3.2-vision",
+            messages: [
+              {
+                role: "user",
+                content: classificationPrompt,
+                images: [base64Data],
+              },
+            ],
+            format: "json",
+          };
+
+          // Send the request and handle streaming response
+          responseDiv.innerHTML =
+            '<div class="loading">Analyzing image and collecting response...</div>';
+
+          const response = await fetch("http://localhost:11434/api/chat", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(payload),
+          });
+
+          if (!response.ok) {
+            throw new Error(`HTTP error! Status: ${response.status}`);
+          }
+
+          // Set up for streaming response
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+
+          // Variables to collect the JSON content
+          let jsonRawContent = "";
+          let streamedContent = "";
+
+          // Read the stream
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            // Decode the chunk
+            const chunk = decoder.decode(value, { stream: true });
+            console.log("Received chunk:", chunk);
+
+            // Process each line in the chunk
+            const lines = chunk.split("\n").filter((line) => line.trim());
+
+            for (const line of lines) {
+              try {
+                const jsonObj = JSON.parse(line);
+                if (jsonObj.message && jsonObj.message.content) {
+                  streamedContent += jsonObj.message.content;
+                  jsonRawContent += jsonObj.message.content;
+
+                  // Update the UI to show progress
+                  responseDiv.innerHTML =
+                    '<div class="loading">Collecting response: ' +
+                    streamedContent.length +
+                    " characters received...</div>";
+                }
+              } catch (e) {
+                console.error("Error parsing JSON line:", e);
+              }
+            }
+          }
+
+          console.log("Complete JSON content collected:", jsonRawContent);
+
+          try {
+            // Try to parse the completed JSON from the streamed content
+            let jsonResponse;
+
+            // First, check if we received valid JSON content
+            try {
+              jsonResponse = JSON.parse(jsonRawContent);
+              console.log("Successfully parsed JSON:", jsonResponse);
+            } catch (e) {
+              console.error("Error parsing streamed JSON content:", e);
+
+              // Try to fix common JSON streaming issues
+              // Sometimes we need to add closing braces or fix partial JSON
+              let fixedJson = jsonRawContent;
+
+              // Check for unclosed braces
+              const openBraces = (fixedJson.match(/{/g) || []).length;
+              const closeBraces = (fixedJson.match(/}/g) || []).length;
+              if (openBraces > closeBraces) {
+                fixedJson += "}".repeat(openBraces - closeBraces);
+              }
+
+              // If we have a partial JSON with just properties, wrap it
+              if (!fixedJson.trim().startsWith("{")) {
+                fixedJson = "{" + fixedJson;
+              }
+              if (!fixedJson.trim().endsWith("}")) {
+                fixedJson += "}";
+              }
+
+              try {
+                jsonResponse = JSON.parse(fixedJson);
+                console.log("Parsed fixed JSON:", jsonResponse);
+              } catch (e2) {
+                console.error("Still failed to parse JSON after fixing:", e2);
+
+                // Create a manually constructed object from regex matching
+                jsonResponse = {};
+
+                // Try to extract key values using regex
+                const warmthMatch = jsonRawContent.match(
+                  /"warmth"\s*:\s*"([^"]*)"/
+                );
+                if (warmthMatch) jsonResponse.warmth = warmthMatch[1];
+
+                const elementsMatch = jsonRawContent.match(
+                  /"elements"\s*:\s*(\[[^\]]*\])/
+                );
+                if (elementsMatch) {
+                  try {
+                    jsonResponse.elements = JSON.parse(elementsMatch[1]);
+                  } catch (e) {
+                    jsonResponse.elements = elementsMatch[1];
+                  }
+                }
+
+                const landscapeMatch = jsonRawContent.match(
+                  /"landscape"\s*:\s*"([^"]*)"/
+                );
+                if (landscapeMatch) jsonResponse.landscape = landscapeMatch[1];
+
+                const emotionalMatch = jsonRawContent.match(
+                  /"emotional"\s*:\s*"([^"]*)"/
+                );
+                if (emotionalMatch) jsonResponse.emotional = emotionalMatch[1];
+
+                const styleMatch = jsonRawContent.match(
+                  /"style"\s*:\s*"([^"]*)"/
+                );
+                if (styleMatch) jsonResponse.style = styleMatch[1];
+              }
+            }
+
+            // Display the classification results in a table
+            let resultsHtml = "<h2>Image Classification Results</h2>";
+
+            if (
+              jsonResponse.warmth !== undefined ||
+              jsonResponse.elements !== undefined
+            ) {
+              // We have a proper classification object
+              resultsHtml += "<table>";
+              resultsHtml +=
+                "<tr><th>Parameter</th><th>Classification</th></tr>";
+
+              // Warmth
+              resultsHtml += `<tr><td>Warmth</td><td>${
+                jsonResponse.warmth || "Not classified"
+              }</td></tr>`;
+
+              // Elements
+              let elementsText = "Not classified";
+              if (jsonResponse.elements) {
+                if (Array.isArray(jsonResponse.elements)) {
+                  elementsText = jsonResponse.elements.join(", ");
+                } else {
+                  elementsText = String(jsonResponse.elements);
+                }
+              }
+              resultsHtml += `<tr><td>Elements</td><td>${elementsText}</td></tr>`;
+
+              // Landscape
+              resultsHtml += `<tr><td>Landscape</td><td>${
+                jsonResponse.landscape || "Not classified"
+              }</td></tr>`;
+
+              // Emotional
+              resultsHtml += `<tr><td>Emotional</td><td>${
+                jsonResponse.emotional || "Not classified"
+              }</td></tr>`;
+
+              // Style
+              resultsHtml += `<tr><td>Style</td><td>${
+                jsonResponse.style || "Not classified"
+              }</td></tr>`;
+
+              resultsHtml += "</table>";
+
+              // Add raw JSON below the table for debugging
+              resultsHtml += "<h3>Raw Data</h3>";
+              resultsHtml += `<pre>${JSON.stringify(
+                jsonResponse,
+                null,
+                2
+              )}</pre>`;
+              resultsHtml += "<h3>Original Streamed Content</h3>";
+              resultsHtml += `<pre>${jsonRawContent}</pre>`;
+            } else {
+              // Raw JSON response
+              resultsHtml += `<p>Could not extract proper classification data.</p>`;
+              resultsHtml += `<h3>Raw JSON Response</h3>`;
+              resultsHtml += `<pre>${JSON.stringify(
+                jsonResponse,
+                null,
+                2
+              )}</pre>`;
+              resultsHtml += `<h3>Original Streamed Content</h3>`;
+              resultsHtml += `<pre>${jsonRawContent}</pre>`;
+            }
+
+            responseDiv.innerHTML = resultsHtml;
+          } catch (parseError) {
+            console.error("Error parsing response:", parseError);
+            responseDiv.innerHTML = `
+                        <h2>Error Parsing Response</h2>
+                        <p>The API did not return valid JSON. Raw response:</p>
+                        <pre>${responseText}</pre>
+                    `;
+          }
+        } catch (error) {
+          responseDiv.innerHTML = `<strong>Error:</strong><br>${error.message}`;
+          console.error("Error:", error);
+        } finally {
+          // Re-enable button
+          submitBtn.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>
